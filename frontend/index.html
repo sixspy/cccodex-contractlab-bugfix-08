@@ -52,19 +52,22 @@ createApp({
     const token=ref(localStorage.getItem('contractlab_token')||'');
     const user=ref(localStorage.getItem('contractlab_user')||'');
     const username=ref('admin'), password=ref('123456'), err=ref(''), tab=ref(0), actionErr=ref('');
-    const contracts=ref([]), batches=ref([]), buffers=ref([]), recon=ref({});
+    const role=ref(localStorage.getItem('contractlab_role')||'');
+    const contracts=ref([]), batches=ref([]), buffers=ref([]), recon=ref({}), auditTrail=ref([]);
     const form=ref({subject:'订单入站', payload_fields:'order_id,amount'});
     const nav=['契约版本','入站校验','双写缓冲','契约对账'];
+    const canWrite=()=>role.value==='管理员';
     function auth(){return {Authorization:'Bearer '+token.value,'Content-Type':'application/json'};}
     async function login(){
       err.value='';
       const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username.value,password:password.value})});
       const j=await r.json(); if(!r.ok){err.value=j.detail||'登录失败';return;}
-      token.value=j.token; user.value=j.username;
+      token.value=j.token; user.value=j.username; role.value=j.role||'';
       localStorage.setItem('contractlab_token',j.token); localStorage.setItem('contractlab_user',j.username);
+      localStorage.setItem('contractlab_role',role.value);
       await refresh();
     }
-    function logout(){token.value='';user.value='';localStorage.removeItem('contractlab_token');localStorage.removeItem('contractlab_user');}
+    function logout(){token.value='';user.value='';role.value='';localStorage.removeItem('contractlab_token');localStorage.removeItem('contractlab_user');localStorage.removeItem('contractlab_role');}
     async function loadJson(url){
       const r=await fetch(url,{headers:auth()});
       const j=await r.json().catch(()=>({}));
@@ -81,6 +84,8 @@ createApp({
       buffers.value=Array.isArray(u.items)?u.items:[];
       const q=await loadJson('/api/reconcile'); if(q===null) return;
       recon.value=q&&typeof q==='object'?q:{};
+      const au=await loadJson('/api/audit'); if(au===null) return;
+      auditTrail.value=Array.isArray(au.items)?au.items.slice(0,12):[];
     }
     async function validate(){
       actionErr.value='';
@@ -89,7 +94,7 @@ createApp({
       await refresh();
     }
     onMounted(()=>{if(token.value)refresh();});
-    return {token,user,username,password,err,tab,nav,contracts,batches,buffers,recon,form,actionErr,login,logout,validate};
+    return {token,user,role,canWrite,username,password,err,tab,nav,contracts,batches,buffers,recon,auditTrail,form,actionErr,login,logout,validate};
   },
   template:`
   <div v-if="!token" class="login">
@@ -119,7 +124,8 @@ createApp({
         <h2>提交入站</h2>
         <label>主题</label><input v-model="form.subject"/>
         <label>载荷字段</label><input v-model="form.payload_fields"/>
-        <button class="primary" @click="validate">按正式契约校验</button>
+        <button class="primary" @click="validate" :disabled="!canWrite()">按正式契约校验</button>
+        <div class="meta" v-if="!canWrite()">只读席位无写入权限；本按钮仅为提示，服务端写入口已按角色拦截并留审计痕。</div>
         <div class="err">{{actionErr}}</div>
       </div>
       <div class="card">
@@ -140,6 +146,14 @@ createApp({
     <div class="card" v-show="tab===3">
       <h2>契约对账摘要</h2>
       <p>入站 {{recon.ingress_total}} · 通过 {{recon.passed}} · 缓冲 {{recon.buffered}} · 拒收 {{recon.rejected}} · 缓冲行 {{recon.buffer_rows}} · 对齐 {{recon.aligned}}</p>
+      <h2>审计条</h2>
+      <p class="meta">令牌冒写拦截痕在此留档，仅供只读查看。</p>
+      <table><thead><tr><th>时间</th><th>席位</th><th>动作</th><th>说明</th></tr></thead>
+      <tbody><tr v-for="a in auditTrail" :key="a.id">
+        <td>{{a.created_at}}</td><td>{{a.actor}}</td>
+        <td><span class="stamp" :class="{bad:a.action==='拦截'}">{{a.action}}</span></td>
+        <td>{{a.detail}}</td>
+      </tr></tbody></table>
     </div>
   </div>`
 }).mount('#app');
